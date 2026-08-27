@@ -80,10 +80,15 @@ def _release_google_service_cycles() -> None:
     gc.collect()
 
 
+def _get_explicit_user_google_email() -> Optional[str]:
+    """Return only an explicitly configured default user email."""
+    return os.getenv("USER_GOOGLE_EMAIL") or _ENV_USER_EMAIL
+
+
 def _get_configured_user_google_email() -> Optional[str]:
-    """Return the configured or safely inferred default user email."""
+    """Return the explicit or safely inferred legacy OAuth default email."""
     identity_email = get_legacy_account_identity().default_email
-    return identity_email or os.getenv("USER_GOOGLE_EMAIL") or _ENV_USER_EMAIL
+    return identity_email or _get_explicit_user_google_email()
 
 
 # Authentication helper functions
@@ -304,7 +309,7 @@ async def _authenticate_service(
         Tuple of (service, actual_user_email)
     """
     if is_service_account_enabled():
-        canonical_email = _get_configured_user_google_email()
+        canonical_email = _get_explicit_user_google_email()
         if not canonical_email:
             raise GoogleAuthenticationError(
                 "Service account mode requires USER_GOOGLE_EMAIL to be configured."

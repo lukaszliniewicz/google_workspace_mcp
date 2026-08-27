@@ -25,6 +25,7 @@ class LegacyAccountIdentity:
 
     @property
     def sole_stored_email(self) -> Optional[str]:
+        """Return the sole stored account when single-user mode makes it unambiguous."""
         if self.single_user and len(self.stored_users) == 1:
             return self.stored_users[0]
         return None
@@ -49,6 +50,7 @@ class LegacyAccountIdentity:
 
 
 def _normalize_email(value: Optional[str]) -> Optional[str]:
+    """Trim an optional email value and collapse blank strings to ``None``."""
     if value is None:
         return None
     normalized = value.strip()

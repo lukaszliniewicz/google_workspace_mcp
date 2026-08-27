@@ -413,6 +413,39 @@ async def test_authenticate_service_account_raises_without_configured_user(
         )
 
 
+@pytest.mark.asyncio
+async def test_service_account_does_not_use_inferred_single_user_identity(monkeypatch):
+    """A sole OAuth credential must not satisfy service-account configuration."""
+    monkeypatch.setattr(service_decorator, "_ENV_USER_EMAIL", None)
+    monkeypatch.delenv("USER_GOOGLE_EMAIL", raising=False)
+    monkeypatch.setenv("MCP_SINGLE_USER_MODE", "1")
+    monkeypatch.setattr(service_decorator, "is_service_account_enabled", lambda: True)
+    monkeypatch.setattr(
+        service_decorator,
+        "get_legacy_account_identity",
+        lambda: LegacyAccountIdentity(
+            single_user=True,
+            configured_email=None,
+            stored_users=("stored@example.com",),
+        ),
+    )
+
+    with pytest.raises(
+        service_decorator.GoogleAuthenticationError,
+        match="Service account mode requires USER_GOOGLE_EMAIL to be configured",
+    ):
+        await service_decorator._authenticate_service(
+            use_oauth21=False,
+            service_name="gmail",
+            service_version="v1",
+            tool_name="sample_tool",
+            user_google_email="caller@example.com",
+            resolved_scopes=["scope-a"],
+            mcp_session_id=None,
+            authenticated_user=None,
+        )
+
+
 # --- DWD per-request impersonation tests ---
 
 
