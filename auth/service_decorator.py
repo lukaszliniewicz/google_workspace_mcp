@@ -13,6 +13,7 @@ from google.auth.exceptions import RefreshError
 from google.oauth2 import service_account as google_service_account
 from googleapiclient.discovery import build
 from fastmcp.server.dependencies import get_access_token, get_context
+from auth.account_identity import get_legacy_account_identity
 from auth.google_auth import get_authenticated_google_service, GoogleAuthenticationError
 from auth.gateway_identity import require_gateway_principal
 from auth.request_identity import get_request_identity
@@ -80,8 +81,9 @@ def _release_google_service_cycles() -> None:
 
 
 def _get_configured_user_google_email() -> Optional[str]:
-    """Return the configured default user email, preferring the live environment."""
-    return os.getenv("USER_GOOGLE_EMAIL") or _ENV_USER_EMAIL
+    """Return the configured or safely inferred default user email."""
+    identity_email = get_legacy_account_identity().default_email
+    return identity_email or os.getenv("USER_GOOGLE_EMAIL") or _ENV_USER_EMAIL
 
 
 # Authentication helper functions
