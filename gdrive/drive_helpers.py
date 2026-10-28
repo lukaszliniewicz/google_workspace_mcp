@@ -588,12 +588,19 @@ async def list_drive_file_revisions_data(
     )
 
     native_file = mime_type.startswith(GOOGLE_APPS_MIME_PREFIX)
+    native_exportable = mime_type in (
+        GOOGLE_DOCS_MIME_TYPE,
+        GOOGLE_SHEETS_MIME_TYPE,
+        GOOGLE_SLIDES_MIME_TYPE,
+    )
     revisions = []
     for revision in response.get("revisions", []):
         revision_id = revision.get("id")
         editor = revision.get("lastModifyingUser") or {}
-        can_download = native_file or bool(
-            revision.get("keepForever") or revision_id == head_revision_id
+        can_download = (
+            native_exportable
+            if native_file
+            else bool(revision.get("keepForever") or revision_id == head_revision_id)
         )
         revisions.append(
             {

@@ -20,6 +20,7 @@ from gdrive.drive_tools import (
 
 
 def _unwrap(tool):
+    """Reach the tool implementation without its MCP/authentication wrappers."""
     fn = tool.fn if hasattr(tool, "fn") else tool
     while hasattr(fn, "__wrapped__"):
         fn = fn.__wrapped__
@@ -27,6 +28,7 @@ def _unwrap(tool):
 
 
 def _mock_revision_service(list_response=None, get_response=None):
+    """Build only the revision request chains supplied by the individual test."""
     service = Mock()
     revisions = Mock()
     service.revisions.return_value = revisions
@@ -141,6 +143,30 @@ async def test_list_revisions_marks_only_head_or_pinned_blob_downloadable():
 
     assert [r["download_available"] for r in result["revisions"]] == [False, True, True]
     assert [r["is_head"] for r in result["revisions"]] == [False, False, True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mime_type",
+    ["application/vnd.google-apps.drawing", "application/vnd.google-apps.form"],
+)
+async def test_list_revisions_does_not_advertise_unsupported_native_exports(mime_type):
+    service = _mock_revision_service(
+        list_response={"revisions": [{"id": "1", "keepForever": True}]}
+    )
+    with patch(
+        "gdrive.drive_helpers.resolve_drive_item",
+        return_value=(
+            "native123",
+            {
+                "name": "Unsupported native file",
+                "mimeType": mime_type,
+                "headRevisionId": "1",
+            },
+        ),
+    ):
+        result = await list_drive_file_revisions_data(service, "native123")
+    assert result["revisions"][0]["download_available"] is False
 
 
 @pytest.mark.asyncio
@@ -356,6 +382,7 @@ async def test_existing_download_tool_accepts_revision_id(tmp_path):
 
     class _Storage:
         def save_attachment_from_path(self, src_path, filename, mime_type):
+            """Return an attachment record without moving the test's temporary file."""
             result = Mock()
             result.path = Path(src_path)
             result.file_id = "attachment"
