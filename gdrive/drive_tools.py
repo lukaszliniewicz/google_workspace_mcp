@@ -119,8 +119,8 @@ logger = logging.getLogger(__name__)
 def _stateless_too_large_message(
     file_name: str,
     file_id: str,
-    size_bytes: int,
-    mime_type: str,
+    size_bytes: Optional[int],
+    mime_type: Optional[str],
     limit: int,
     *,
     revision_id: Optional[str] = None,
@@ -134,8 +134,10 @@ def _stateless_too_large_message(
         )
     lines.extend(
         [
-            f"Size: {size_bytes / 1024:.1f} KB ({size_bytes} bytes)",
-            f"MIME Type: {mime_type}",
+            f"Size: {size_bytes / 1024:.1f} KB ({size_bytes} bytes)"
+            if size_bytes is not None
+            else f"Size: exceeds {limit} bytes (exact size unavailable)",
+            f"MIME Type: {mime_type or 'unavailable'}",
             "",
             "Not returned: stateless mode has no file storage, and this file "
             f"exceeds the inline limit of {limit} bytes "
@@ -542,7 +544,7 @@ async def get_drive_file_content(
         else ""
     )
     header = (
-        f'File: "{file_name}" (ID: {file_id}, Type: {mime_type})\n'
+        f'File: "{file_name}" (ID: {file_id}, Type: {parse_mime_type})\n'
         f"{revision_line}"
         f"Link: {web_view_link}\n\n--- CONTENT ---\n"
     )
@@ -716,12 +718,26 @@ async def get_drive_file_download_url(
     # Stream the download straight to disk. Outside the capped stateless inline
     # return, the payload is never held in memory as a whole.
     if revision_id:
-        revision_download = await download_drive_revision_to_temp(
-            service,
-            file_id,
-            revision_id,
-            export_format=export_format,
-        )
+        try:
+            revision_download = await download_drive_revision_to_temp(
+                service,
+                file_id,
+                revision_id,
+                export_format=export_format,
+                max_bytes=inline_max_bytes,
+            )
+        except FileTooLargeError:
+            if inline_max_bytes is None:
+                raise
+            # Revision metadata is returned only after a successful download.
+            return _stateless_too_large_message(
+                file_name,
+                file_id,
+                None,
+                None,
+                inline_max_bytes,
+                revision_id=revision_id,
+            )
         file_id = revision_download["file_id"]
         file_name = revision_download["file_name"]
         output_filename = revision_download["output_filename"]

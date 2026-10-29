@@ -2,12 +2,14 @@
 
 import base64
 import json
+import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from googleapiclient.errors import HttpError
 
+from core.file_limits import FileTooLargeError
 from core.utils import UserInputError
 from gdrive.drive_helpers import (
     download_drive_revision_to_temp,
@@ -391,6 +393,40 @@ async def test_blob_revision_download_rejects_unpinned_old_revision():
 
 
 @pytest.mark.asyncio
+async def test_retained_blob_revision_size_rejects_before_media_download():
+    service = _mock_revision_service(
+        get_response={
+            "id": "old",
+            "mimeType": "application/pdf",
+            "keepForever": True,
+            "size": "101",
+            "originalFilename": "historic.pdf",
+        }
+    )
+
+    with (
+        patch(
+            "gdrive.drive_helpers.resolve_drive_item",
+            return_value=(
+                "file123",
+                {
+                    "name": "current.pdf",
+                    "mimeType": "application/pdf",
+                    "headRevisionId": "head",
+                    "webViewLink": "https://drive.google.com/file/d/file123",
+                },
+            ),
+        ),
+        patch("gdrive.drive_helpers.download_media_bytes") as download,
+        pytest.raises(FileTooLargeError),
+    ):
+        await download_drive_revision_to_temp(service, "file123", "old", max_bytes=100)
+
+    service.revisions().get_media.assert_not_called()
+    download.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_blob_revision_uses_revision_filename_and_mime(tmp_path):
     service = _mock_revision_service(
         get_response={
@@ -443,6 +479,7 @@ async def test_existing_download_tool_accepts_revision_id(tmp_path):
         "output_filename": "Policy_rev12.pdf",
         "output_mime_type": "application/pdf",
     }
+    service = Mock()
 
     class _Storage:
         def save_attachment_from_path(self, src_path, filename, mime_type):
@@ -473,14 +510,16 @@ async def test_existing_download_tool_accepts_revision_id(tmp_path):
         patch("gdrive.drive_tools.get_attachment_storage", return_value=_Storage()),
     ):
         result = await _unwrap(get_drive_file_download_url)(
-            service=Mock(),
+            service=service,
             user_google_email="user@example.com",
             file_id="doc123",
             export_format="pdf",
             revision_id="12",
         )
 
-    helper.assert_awaited_once()
+    helper.assert_awaited_once_with(
+        service, "doc123", "12", export_format="pdf", max_bytes=None
+    )
     assert "Revision: 12 (2026-08-28T13:00:00Z)" in result
     assert "Policy_rev12.pdf" not in result  # path remains transport-specific
 
@@ -589,6 +628,7 @@ async def test_historical_stateless_download_embeds_full_revision_and_cleans_tem
         "output_filename": "report_rev7.pdf",
         "output_mime_type": "application/pdf",
     }
+    service = Mock()
 
     with (
         patch(
@@ -607,18 +647,59 @@ async def test_historical_stateless_download_embeds_full_revision_and_cleans_tem
         patch("gdrive.drive_tools.get_stateless_inline_max_bytes", return_value=100),
     ):
         result = await _unwrap(get_drive_file_download_url)(
-            service=Mock(),
+            service=service,
             user_google_email="user@example.com",
             file_id="file123",
             revision_id="7",
         )
 
-    helper.assert_awaited_once()
+    helper.assert_awaited_once_with(
+        service, "file123", "7", export_format=None, max_bytes=100
+    )
     assert "Revision: 7 (2026-08-28T13:00:00Z)" in result.content[0].text
     embedded = result.content[1].resource
     assert embedded.blob == base64.b64encode(content).decode("ascii")
     assert embedded.mime_type == "application/pdf"
     assert not temp.exists()
+
+
+@pytest.mark.asyncio
+async def test_historical_stateless_download_handles_size_error_without_storage():
+    service = Mock()
+    limit = 100
+    with (
+        patch(
+            "gdrive.drive_tools.resolve_drive_item",
+            return_value=(
+                "file123",
+                {"name": "report.pdf", "mimeType": "application/pdf", "size": "1"},
+            ),
+        ),
+        patch(
+            "gdrive.drive_tools.download_drive_revision_to_temp",
+            new=AsyncMock(side_effect=FileTooLargeError("download exceeded limit")),
+        ) as helper,
+        patch("gdrive.drive_tools.is_stateless_mode", return_value=True),
+        patch("gdrive.drive_tools.gcs_files_enabled", return_value=False),
+        patch("gdrive.drive_tools.get_stateless_inline_max_bytes", return_value=limit),
+        patch("gdrive.drive_tools.get_attachment_storage") as get_storage,
+    ):
+        result = await _unwrap(get_drive_file_download_url)(
+            service=service,
+            user_google_email="user@example.com",
+            file_id="file123",
+            revision_id="7",
+        )
+
+    helper.assert_awaited_once_with(
+        service, "file123", "7", export_format=None, max_bytes=limit
+    )
+    assert isinstance(result, str)
+    assert f"exceeds the inline limit of {limit} bytes" in result
+    assert "Revision: 7 (modified time unavailable)" in result
+    assert f"Size: exceeds {limit} bytes (exact size unavailable)" in result
+    assert "MIME Type: unavailable" in result
+    get_storage.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -749,3 +830,93 @@ async def test_existing_content_tool_reads_historical_revision(tmp_path):
     assert not temp.exists()
     assert "Revision: 12 (2026-08-28T13:00:00Z)" in result
     assert "Historical text" in result
+
+
+@pytest.mark.asyncio
+async def test_historical_content_uses_revision_mime_for_type_and_text(tmp_path):
+    temp = tmp_path / "report.txt"
+    historical_text = "Historical plain text"
+    temp.write_text(historical_text, encoding="utf-8")
+    service = Mock()
+    download_result = {
+        "path": temp,
+        "file_id": "file123",
+        "file_name": "report.txt",
+        "revision_id": "old",
+        "revision_modified_time": "2026-08-28T13:00:00Z",
+        "output_filename": "report_revold.txt",
+        "output_mime_type": "text/plain",
+    }
+
+    with (
+        patch(
+            "gdrive.drive_tools.resolve_drive_item",
+            return_value=(
+                "file123",
+                {
+                    "name": "report.pdf",
+                    "mimeType": "application/pdf",
+                    "webViewLink": "https://drive.google.com/file/d/file123",
+                },
+            ),
+        ),
+        patch(
+            "gdrive.drive_tools.download_drive_revision_to_temp",
+            new=AsyncMock(return_value=download_result),
+        ) as helper,
+    ):
+        result = await _unwrap(get_drive_file_content)(
+            service=service,
+            user_google_email="user@example.com",
+            file_id="file123",
+            revision_id="old",
+        )
+
+    helper.assert_awaited_once_with(
+        service, "file123", "old", export_format=None, max_bytes=None
+    )
+    assert "Type: text/plain)" in result
+    assert "Type: application/pdf)" not in result
+    assert historical_text in result
+    assert not temp.exists()
+
+
+@pytest.mark.asyncio
+async def test_capped_native_revision_download_cleans_up_after_size_error(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    service = _mock_revision_service(
+        get_response={
+            "id": "12",
+            "modifiedTime": "2026-08-28T13:00:00Z",
+            "mimeType": "application/vnd.google-apps.document",
+            "exportLinks": {"application/pdf": "https://example.invalid/revision.pdf"},
+        }
+    )
+    service._http = Mock()
+
+    with (
+        patch(
+            "gdrive.drive_helpers.resolve_drive_item",
+            return_value=(
+                "doc123",
+                {
+                    "name": "Policy",
+                    "mimeType": "application/vnd.google-apps.document",
+                },
+            ),
+        ),
+        patch(
+            "gdrive.drive_helpers.download_media_bytes",
+            new=AsyncMock(side_effect=FileTooLargeError("download exceeded limit")),
+        ) as download,
+        pytest.raises(FileTooLargeError, match="download exceeded limit"),
+    ):
+        await download_drive_revision_to_temp(
+            service, "doc123", "12", export_format="pdf", max_bytes=100
+        )
+
+    download.assert_awaited_once()
+    assert download.call_args.kwargs["max_bytes"] == 100
+    assert list(tmp_path.iterdir()) == []
