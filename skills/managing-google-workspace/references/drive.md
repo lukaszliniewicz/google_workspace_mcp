@@ -3,7 +3,7 @@
 MCP tools for Google Drive file management, search, content retrieval, and permission control. All tools require `user_google_email` (string, required).
 
 ## Contents
-- Search & Browse: search_drive_files, list_drive_items, list_drive_file_revisions
+- Search & Browse: search_drive_files, list_drive_items
 - Content & Download: get_drive_file_content, get_drive_file_download_url
 - Create & Modify: create_drive_file, create_drive_folder, copy_drive_file, update_drive_file
 - Permissions & Sharing: set_drive_file_permissions, manage_drive_access, get_drive_file_permissions, get_drive_shareable_link, check_drive_file_public_access
@@ -32,35 +32,30 @@ Search for files and folders across My Drive and shared drives.
 | include_trashed | boolean | no | false | Include files in the trash. A `trashed` clause (`=` or `!=`) written into `query` always wins over this flag |
 
 ### list_drive_items
-List files and folders in a specific folder, or list shared drive containers with `resource_type="shared_drives"`.
+List files and folders in a specific folder, shared drive containers with `resource_type="shared_drives"`, or a file's revision history with `resource_type="revisions"` and `file_id`.
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
 | user_google_email | string | yes | | |
 | folder_id | string | no | root | Folder ID. Use shared drive ID for its root |
-| page_size | integer | no | 100 | Max items to return |
-| page_token | any | no | | Pagination token |
+| page_size | integer | no | 100 | Max items to return; 1-1000 for revisions |
+| page_token | any | no | | Pagination token; use `next_page_token` from revision responses |
 | drive_id | string | no | | Shared drive ID to scope listing |
 | include_items_from_all_drives | boolean | no | true | Include shared drive items when no drive_id set |
 | corpora | string | no | | `user`, `drive`, `allDrives` |
 | file_type | string | no | | Same friendly names as search_drive_files |
 | detailed | boolean | no | true | Include size, modified time, and link |
 | order_by | string | no | | Sort order (see Sort Order below) |
-| resource_type | string | no | items | `items` (folder contents) or `shared_drives` (shared drive containers) |
+| resource_type | string | no | items | `items` (folder contents), `shared_drives` (shared drive containers), or `revisions` (a file's history) |
 | query | string | no | | Shared drive query, e.g. `name contains 'Engineering'`. Only with `resource_type="shared_drives"` |
 | include_organizers | boolean | no | false | Include organizer principals per shared drive (one extra API call each). Only with `resource_type="shared_drives"` |
+| file_id | string | with revisions | | Drive file ID or shortcut; only with `resource_type="revisions"` |
 
-### list_drive_file_revisions
-List one page of the Drive-visible revision history for a file. Drive can compact or omit older revisions, especially for frequently edited Google Workspace files, so this is not guaranteed to be a complete audit log.
+#### Revision history
 
-| Parameter | Type | Required | Default | Notes |
-|-----------|------|----------|---------|-------|
-| user_google_email | string | yes | | |
-| file_id | string | yes | | Drive file ID or shortcut |
-| page_size | integer | no | 100 | 1-1000 revisions |
-| page_token | string | no | | Token from the previous page |
+Use `list_drive_items(resource_type="revisions", file_id=...)` to retrieve one page of Drive-visible history. This mode returns a JSON string with `file`, `revisions`, `next_page_token`, and `history_scope`. Folder, search, sorting, shared-drive and `detailed` options do not apply. Drive can compact or omit older revisions, especially for frequently edited Google Workspace files, so this is not guaranteed to be a complete audit log.
 
-Each revision includes its ID, modified time, last modifying user, MIME/size metadata, keep-forever status where applicable, and a `download_available` flag. Use the returned revision ID with `get_drive_file_download_url(revision_id=...)` to retrieve historical content.
+Each revision includes its ID, modified time, last modifying user, MIME/size metadata, keep-forever status where applicable, and a `download_available` flag. Pass its `id` to `get_drive_file_content(revision_id=...)` to read the historical text, or to `get_drive_file_download_url(revision_id=...)` to download that version. No new MCP tool is required.
 
 ---
 
@@ -73,7 +68,7 @@ Retrieve file content as text.
 |-----------|------|----------|---------|-------|
 | user_google_email | string | yes | | |
 | file_id | string | yes | | Drive file ID |
-| revision_id | string | no | | Historical revision ID returned by `list_drive_file_revisions` |
+| revision_id | string | no | | Historical revision ID returned by `list_drive_items(resource_type="revisions", file_id=...)` |
 
 Content handling:
 - Google Docs/Sheets/Slides: exported as text/CSV
@@ -92,7 +87,7 @@ Download a file to local disk (stdio mode) or get a temporary URL (HTTP mode, va
 | user_google_email | string | yes | | |
 | file_id | string | yes | | Drive file ID |
 | export_format | string | no | | `pdf`, `docx`, `xlsx`, `csv`, `pptx` |
-| revision_id | string | no | | Historical revision ID returned by `list_drive_file_revisions` |
+| revision_id | string | no | | Historical revision ID returned by `list_drive_items(resource_type="revisions", file_id=...)` |
 
 Default export formats for Google native files:
 - Docs: PDF (or `docx`)

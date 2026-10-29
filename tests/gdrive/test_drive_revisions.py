@@ -1,6 +1,7 @@
 """Tests for Drive revision history and historical downloads."""
 
 import base64
+import json
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -15,7 +16,7 @@ from gdrive.drive_helpers import (
 from gdrive.drive_tools import (
     get_drive_file_content,
     get_drive_file_download_url,
-    list_drive_file_revisions,
+    list_drive_items,
 )
 
 
@@ -176,23 +177,86 @@ async def test_list_revisions_rejects_page_size_outside_range():
 
 
 @pytest.mark.asyncio
-async def test_list_revisions_tool_is_thin_wrapper():
-    expected = {"file": {"id": "x"}, "revisions": []}
+async def test_list_drive_items_routes_normalized_revisions_and_preserves_payload():
+    expected = {
+        "file": {"id": "x", "name": "政策"},
+        "revisions": [],
+        "next_page_token": "next-token",
+        "history_scope": "Drive only returns retained history; results are not guaranteed.",
+    }
     service = Mock()
     with patch(
         "gdrive.drive_tools.list_drive_file_revisions_data",
         return_value=expected,
     ) as helper:
-        result = await _unwrap(list_drive_file_revisions)(
+        result = await _unwrap(list_drive_items)(
             service=service,
             user_google_email="user@example.com",
-            file_id="x",
-            page_size=10,
-            page_token="p",
+            resource_type="  ReViSiOnS  ",
+            file_id="doc123",
+            page_size=25,
+            page_token="page-1",
         )
 
-    assert result == expected
-    helper.assert_awaited_once_with(service, "x", page_size=10, page_token="p")
+    assert isinstance(result, str)
+    assert json.loads(result) == expected
+    assert "政策" in result
+    assert r"\u653f\u7b56" not in result
+    helper.assert_awaited_once_with(
+        service, "doc123", page_size=25, page_token="page-1"
+    )
+    service.files.assert_not_called()
+    service.drives.assert_not_called()
+    service.permissions.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("file_id", [None, "", " \t\n"])
+async def test_list_drive_items_revisions_requires_nonblank_file_id(file_id):
+    service = Mock()
+    with (
+        patch("gdrive.drive_tools.list_drive_file_revisions_data") as helper,
+        patch("gdrive.drive_tools.resolve_folder_id") as resolve_folder,
+        pytest.raises(
+            UserInputError,
+            match=r"file_id is required when resource_type='revisions'\.",
+        ),
+    ):
+        await _unwrap(list_drive_items)(
+            service=service,
+            user_google_email="user@example.com",
+            resource_type="revisions",
+            file_id=file_id,
+        )
+
+    helper.assert_not_awaited()
+    resolve_folder.assert_not_awaited()
+    service.files.assert_not_called()
+    service.drives.assert_not_called()
+    service.permissions.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resource_type", ["items", "shared_drives"])
+async def test_list_drive_items_rejects_file_id_outside_revisions(resource_type):
+    service = Mock()
+    with (
+        patch("gdrive.drive_tools.list_drive_file_revisions_data") as helper,
+        patch("gdrive.drive_tools.resolve_folder_id") as resolve_folder,
+        pytest.raises(UserInputError, match="file_id is only supported"),
+    ):
+        await _unwrap(list_drive_items)(
+            service=service,
+            user_google_email="user@example.com",
+            resource_type=resource_type,
+            file_id="doc123",
+        )
+
+    helper.assert_not_awaited()
+    resolve_folder.assert_not_awaited()
+    service.files.assert_not_called()
+    service.drives.assert_not_called()
+    service.permissions.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ This module provides MCP tools for interacting with Google Drive API.
 
 import asyncio
 import base64
+import json
 import logging
 import io
 
@@ -371,7 +372,7 @@ async def get_drive_file_content(
       as base64 are attached as image content, numbered to match their place
       in the markup. BMP and TIFF → still returned as base64 text.
     • Any other file → downloaded; tries UTF-8 decode, else notes binary.
-    • Historical revisions → pass revision_id from list_drive_file_revisions.
+    • Historical revisions → pass revision_id from list_drive_items(resource_type="revisions", file_id=...).
 
     Args:
         user_google_email: The user’s Google email address.
@@ -557,53 +558,6 @@ async def get_drive_file_content(
 
 
 @server.tool(
-    title="List Drive File Revisions",
-    annotations=ToolAnnotations(
-        read_only_hint=True,
-        destructive_hint=False,
-        idempotent_hint=True,
-        open_world_hint=True,
-    ),
-)
-@handle_http_errors(
-    "list_drive_file_revisions", is_read_only=True, service_type="drive"
-)
-@require_google_service("drive", "drive_read")
-async def list_drive_file_revisions(
-    service,
-    user_google_email: str,
-    file_id: str,
-    page_size: int = 100,
-    page_token: Optional[str] = None,
-) -> Dict[str, Any]:
-    """List one page of Drive-visible revision history for a file.
-
-    The response includes revision IDs, timestamps, editors, MIME/size metadata,
-    pagination, and whether Drive can retrieve each revision's content. Drive can
-    compact or omit older revisions, so the result is not guaranteed to be a
-    complete audit log.
-
-    Args:
-        user_google_email: The user's Google email address. Required.
-        file_id: Drive file ID or shortcut target. Required.
-        page_size: Revisions to return, 1-1000. Defaults to 100.
-        page_token: Token from a previous response for the next page.
-
-    Returns:
-        dict: File metadata, revision entries, pagination token, and history caveat.
-    """
-    logger.info(
-        f"[list_drive_file_revisions] Invoked. File ID: '{file_id}', page_size={page_size}"
-    )
-    return await list_drive_file_revisions_data(
-        service,
-        file_id,
-        page_size=page_size,
-        page_token=page_token,
-    )
-
-
-@server.tool(
     title="Get Drive File Download URL",
     annotations=ToolAnnotations(
         readOnlyHint=True,
@@ -647,7 +601,7 @@ async def get_drive_file_download_url(
                       Options: 'pdf', 'docx', 'xlsx', 'csv', 'pptx'.
                       If not specified, uses sensible defaults (PDF for Docs/Slides, XLSX for Sheets).
                       For Sheets: supports 'csv', 'pdf', or 'xlsx' (default).
-        revision_id: Optional revision ID from list_drive_file_revisions.
+        revision_id: Optional revision ID from list_drive_items(resource_type="revisions", file_id=...).
 
     Returns:
         str: File metadata with either a local file path or download URL. In
@@ -938,18 +892,25 @@ async def list_drive_items(
     resource_type: str = "items",
     query: Optional[str] = None,
     include_organizers: bool = False,
+    file_id: Optional[str] = None,
 ) -> str:
     """
-    Lists files/folders or shared drive containers, supporting shared drives.
+    Lists files/folders, shared drive containers, or a file's revision history.
     If `drive_id` is specified, lists items within that shared drive. `folder_id` is then relative to that drive (or use drive_id as folder_id for root).
     If `drive_id` is not specified, lists items from user's "My Drive" and accessible shared drives (if `include_items_from_all_drives` is True).
     Set `resource_type` to "shared_drives" to list shared drive containers instead of folder contents.
+    Set `resource_type` to "revisions" and provide `file_id` to list one page of
+    Drive-visible revision history. Use a returned revision ID with
+    get_drive_file_content or get_drive_file_download_url to preview that version.
+    Google can compact or omit older revisions, so this is not a complete audit log.
 
     Args:
         user_google_email (str): The user's Google email address. Required.
         folder_id (str): The ID of the Google Drive folder. Defaults to 'root'. For a shared drive, this can be the shared drive's ID to list its root, or a folder ID within that shared drive.
         page_size (int): The maximum number of items to return. Defaults to 100.
-        page_token (Optional[str]): Page token from a previous response's nextPageToken to retrieve the next page of results.
+                         For resource_type="revisions", must be between 1 and 1000.
+        page_token (Optional[str]): Page token from a previous response's nextPageToken
+                                   (next_page_token for revisions) to retrieve the next page.
         drive_id (Optional[str]): ID of the shared drive. If provided, the listing is scoped to this drive.
         include_items_from_all_drives (bool): Whether items from all accessible shared drives should be included if `drive_id` is not set. Defaults to True.
         corpora (Optional[str]): Corpus to query ('user', 'drive', 'allDrives'). If `drive_id` is set and `corpora` is None, 'drive' is used. If None and no `drive_id`, 'allDrives' is used when `include_items_from_all_drives` is True.
@@ -965,16 +926,23 @@ async def list_drive_items(
                                   'starred', 'viewedByMeTime'. Example: 'modifiedTime desc' or 'folder,modifiedTime desc,name'.
                                   Defaults to None (Drive API default ordering).
         resource_type (str): What to list. Use "items" for folder contents or
-                             "shared_drives" for shared drive containers. Defaults to "items".
+                             "shared_drives" for shared drive containers, or "revisions"
+                             for a file's revision history. Defaults to "items".
         query (Optional[str]): Shared drive query used only when resource_type="shared_drives",
                                e.g. "name contains 'Engineering'".
         include_organizers (bool): When resource_type="shared_drives", include principals
                                    with the organizer role. This costs one extra permissions.list
                                    API call per shared drive returned. Defaults to False.
+        file_id (Optional[str]): Drive file ID or shortcut. Required only with
+                                 resource_type="revisions". Folder, search, sorting, shared
+                                 drive and detailed-output options do not apply to revisions.
 
     Returns:
         str: A formatted list of files/folders in the specified folder or shared drives.
              Includes a nextPageToken line when more results are available.
+             Revisions return a JSON string with file metadata, revision IDs, timestamps,
+             editor information, MIME/size and retention metadata, download_available,
+             next_page_token, and a history_scope caveat.
     """
     logger.info(
         f"[list_drive_items] Invoked. Email: '{user_google_email}', Folder ID: '{folder_id}', "
@@ -982,6 +950,20 @@ async def list_drive_items(
     )
 
     normalized_resource_type = resource_type.lower().strip()
+    if file_id is not None and normalized_resource_type != "revisions":
+        raise UserInputError(
+            "file_id is only supported when resource_type='revisions'."
+        )
+    if normalized_resource_type == "revisions":
+        if not file_id or not file_id.strip():
+            raise UserInputError("file_id is required when resource_type='revisions'.")
+        revisions = await list_drive_file_revisions_data(
+            service,
+            file_id,
+            page_size=page_size,
+            page_token=page_token,
+        )
+        return json.dumps(revisions, ensure_ascii=False)
     if normalized_resource_type == "shared_drives":
         return await _list_shared_drives_impl(
             service=service,
@@ -992,7 +974,9 @@ async def list_drive_items(
             include_organizers=include_organizers,
         )
     if normalized_resource_type != "items":
-        raise ValueError("resource_type must be either 'items' or 'shared_drives'")
+        raise ValueError(
+            "resource_type must be 'items', 'shared_drives', or 'revisions'"
+        )
 
     resolved_folder_id = await resolve_folder_id(service, folder_id)
     final_query = f"'{resolved_folder_id}' in parents and trashed=false"

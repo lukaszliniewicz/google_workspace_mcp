@@ -97,7 +97,7 @@ For parameters: [references/gmail.md](references/gmail.md)
 |------|------|
 | Search files/folders | `search_drive_files` |
 | List items in folder | `list_drive_items` |
-| List file revisions | `list_drive_file_revisions` |
+| List file revisions | `list_drive_items(resource_type="revisions", file_id=...)` |
 | Read file content | `get_drive_file_content` |
 | Download current or historical file | `get_drive_file_download_url` |
 | Create file | `create_drive_file` |
