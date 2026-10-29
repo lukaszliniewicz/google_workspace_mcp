@@ -774,7 +774,8 @@ async def test_stateless_inline_zero_skips_historical_download():
 
 
 @pytest.mark.asyncio
-async def test_existing_content_tool_reads_historical_revision(tmp_path):
+async def test_existing_content_tool_reads_historical_revision(tmp_path, monkeypatch):
+    monkeypatch.delenv("WORKSPACE_MCP_MAX_FILE_BYTES", raising=False)
     temp = tmp_path / "revision.docx"
     temp.write_bytes(b"office-archive")
     service = Mock()
@@ -833,7 +834,10 @@ async def test_existing_content_tool_reads_historical_revision(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_historical_content_uses_revision_mime_for_type_and_text(tmp_path):
+async def test_historical_content_uses_revision_mime_for_type_and_text(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("WORKSPACE_MCP_MAX_FILE_BYTES", raising=False)
     temp = tmp_path / "report.txt"
     historical_text = "Historical plain text"
     temp.write_text(historical_text, encoding="utf-8")
