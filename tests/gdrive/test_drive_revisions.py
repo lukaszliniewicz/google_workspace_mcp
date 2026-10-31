@@ -643,7 +643,7 @@ async def test_historical_content_passes_configured_cap_and_checks_before_read(
         )
 
     helper.assert_awaited_once_with(
-        service, "file123", "7", export_format=None, max_bytes=4
+        service, "file123", "7", for_content=True, max_bytes=4
     )
     assert "too large" in result.lower()
     assert not temp.exists()
@@ -850,6 +850,7 @@ async def test_stateless_inline_zero_skips_historical_download():
     helper.assert_not_awaited()
     assert "Revision: 7 (modified time unavailable)" in result
     assert "inline returns are disabled" in result
+    assert "MIME Type: unavailable" in result
 
 
 @pytest.mark.asyncio
@@ -903,7 +904,7 @@ async def test_existing_content_tool_reads_historical_revision(tmp_path, monkeyp
         service,
         "doc123",
         "12",
-        export_format="docx",
+        for_content=True,
         max_bytes=None,
     )
     current_download.assert_not_awaited()
@@ -956,7 +957,7 @@ async def test_historical_content_uses_revision_mime_for_type_and_text(
         )
 
     helper.assert_awaited_once_with(
-        service, "file123", "old", export_format=None, max_bytes=None
+        service, "file123", "old", for_content=True, max_bytes=None
     )
     assert "Type: text/plain)" in result
     assert "Type: application/pdf)" not in result

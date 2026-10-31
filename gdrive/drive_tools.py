@@ -108,7 +108,6 @@ from gdrive.drive_helpers import (
     normalize_drive_query_v2_compat,
     reject_sources_with_upload_url,
     resolve_drive_item,
-    _revision_export_target,
     resolve_file_type_mime,
     resolve_folder_id,
     resumable_upload_result,
@@ -160,7 +159,7 @@ def _stateless_too_large_message(
 def _stateless_inline_disabled_message(
     file_name: str,
     file_id: str,
-    mime_type: str,
+    mime_type: Optional[str],
     *,
     revision_id: Optional[str] = None,
     revision_modified_time: Optional[str] = None,
@@ -173,7 +172,7 @@ def _stateless_inline_disabled_message(
         )
     lines.extend(
         [
-            f"MIME Type: {mime_type}",
+            f"MIME Type: {mime_type if mime_type is not None else 'unavailable'}",
             "",
             "Not returned: stateless mode has no file storage, and inline "
             "returns are disabled (WORKSPACE_MCP_STATELESS_INLINE_MAX_BYTES=0). "
@@ -561,11 +560,6 @@ async def get_drive_file_content(
     response_mime_type = mime_type
 
     if revision_id:
-        revision_export_format = {
-            "application/vnd.google-apps.document": "docx",
-            "application/vnd.google-apps.spreadsheet": "xlsx",
-            "application/vnd.google-apps.presentation": "pptx",
-        }.get(mime_type)
         revision_path = None
         max_bytes = get_max_file_bytes()
         try:
@@ -573,8 +567,8 @@ async def get_drive_file_content(
                 service,
                 file_id,
                 revision_id,
-                export_format=revision_export_format,
                 max_bytes=max_bytes,
+                for_content=True,
             )
             revision_path = revision_download["path"]
             ensure_within_file_size_limit(
@@ -759,7 +753,7 @@ async def get_drive_file_download_url(
     output_filename = file_name
     output_mime_type = mime_type
 
-    if mime_type == "application/vnd.google-apps.document":
+    if not revision_id and mime_type == "application/vnd.google-apps.document":
         # Google Docs
         if export_format == "docx":
             export_mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -773,7 +767,7 @@ async def get_drive_file_download_url(
             if not output_filename.endswith(".pdf"):
                 output_filename = f"{Path(output_filename).stem}.pdf"
 
-    elif mime_type == "application/vnd.google-apps.spreadsheet":
+    elif not revision_id and mime_type == "application/vnd.google-apps.spreadsheet":
         # Google Sheets
         if export_format == "csv":
             export_mime_type = "text/csv"
@@ -794,7 +788,7 @@ async def get_drive_file_download_url(
             if not output_filename.endswith(".xlsx"):
                 output_filename = f"{Path(output_filename).stem}.xlsx"
 
-    elif mime_type == "application/vnd.google-apps.presentation":
+    elif not revision_id and mime_type == "application/vnd.google-apps.presentation":
         # Google Slides
         if export_format == "pptx":
             export_mime_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
@@ -808,7 +802,7 @@ async def get_drive_file_download_url(
             if not output_filename.endswith(".pdf"):
                 output_filename = f"{Path(output_filename).stem}.pdf"
 
-    elif mime_type == GOOGLE_DRAWINGS_MIME_TYPE:
+    elif not revision_id and mime_type == GOOGLE_DRAWINGS_MIME_TYPE:
         # Google Drawings
         extension, export_mime_type = drawing_export_target(export_format)
         output_mime_type = export_mime_type
@@ -816,10 +810,6 @@ async def get_drive_file_download_url(
             output_filename = f"{output_filename}.{extension}"
 
     revision_modified_time = None
-    if revision_id and mime_type.startswith(GOOGLE_APPS_MIME_PREFIX):
-        export_mime_type, extension = _revision_export_target(mime_type, export_format)
-        output_mime_type = export_mime_type
-        output_filename = f"{Path(file_name).stem}_rev{revision_id}.{extension}"
 
     # Stateless mode has no attachment storage to hand out a URL from, so the
     # file itself goes back as an embedded resource, up to inline_max_bytes.
@@ -833,7 +823,7 @@ async def get_drive_file_download_url(
         return _stateless_inline_disabled_message(
             file_name,
             file_id,
-            output_mime_type,
+            None if revision_id else output_mime_type,
             revision_id=revision_id,
             revision_modified_time=revision_modified_time,
         )
@@ -877,6 +867,7 @@ async def get_drive_file_download_url(
         file_name = revision_download["file_name"]
         output_filename = revision_download["output_filename"]
         output_mime_type = revision_download["output_mime_type"]
+        export_mime_type = revision_download.get("export_mime_type")
         revision_modified_time = revision_download["revision_modified_time"]
         tmp_path = revision_download["path"]
     else:

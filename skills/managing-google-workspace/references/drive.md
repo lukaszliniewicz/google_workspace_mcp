@@ -99,7 +99,7 @@ Default export formats for Google native files:
 - Slides: PDF (or `pptx`)
 - Drawings: PNG (or `pdf`, `jpg`, `svg`)
 
-When `revision_id` is set, the tool retrieves that historical Drive revision. Native Docs, Sheets, and Slides revisions are exported in the requested format; historical Drawing exports are not supported. For uploaded/blob files, older content is only downloadable when Drive still retains it, normally because the revision is the current head or has `keepForever=true`.
+When `revision_id` is set, the tool retrieves that historical Drive revision. Export selection follows the selected revision's type even if the current file has changed format. Native Docs, Sheets, and Slides revisions are exported in the requested format; historical Drawing exports are not supported. For uploaded/blob files, older content is only downloadable when Drive still retains it, normally because the revision is the current head or has `keepForever=true`.
 
 ---
 

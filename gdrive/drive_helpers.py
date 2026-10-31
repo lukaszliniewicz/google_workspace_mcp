@@ -587,19 +587,20 @@ async def list_drive_file_revisions_data(
         .execute
     )
 
-    native_file = mime_type.startswith(GOOGLE_APPS_MIME_PREFIX)
-    native_exportable = mime_type in (
-        GOOGLE_DOCS_MIME_TYPE,
-        GOOGLE_SHEETS_MIME_TYPE,
-        GOOGLE_SLIDES_MIME_TYPE,
-    )
     revisions = []
     for revision in response.get("revisions", []):
         revision_id = revision.get("id")
+        revision_mime_type = revision.get("mimeType") or mime_type
+        native_revision = revision_mime_type.startswith(GOOGLE_APPS_MIME_PREFIX)
+        native_exportable = revision_mime_type in (
+            GOOGLE_DOCS_MIME_TYPE,
+            GOOGLE_SHEETS_MIME_TYPE,
+            GOOGLE_SLIDES_MIME_TYPE,
+        )
         editor = revision.get("lastModifyingUser") or {}
         can_download = (
             native_exportable
-            if native_file
+            if native_revision
             else bool(revision.get("keepForever") or revision_id == head_revision_id)
         )
         revisions.append(
@@ -610,7 +611,7 @@ async def list_drive_file_revisions_data(
                     "display_name": editor.get("displayName"),
                     "email_address": editor.get("emailAddress"),
                 },
-                "mime_type": revision.get("mimeType"),
+                "mime_type": revision_mime_type,
                 "size": revision.get("size"),
                 "original_filename": revision.get("originalFilename"),
                 "keep_forever": revision.get("keepForever"),
@@ -730,8 +731,14 @@ async def download_drive_revision_to_temp(
     *,
     export_format: Optional[str] = None,
     max_bytes: Optional[int] = None,
+    for_content: bool = False,
 ) -> Dict[str, Any]:
-    """Download a Drive-visible historical revision to a temporary file."""
+    """Download a Drive-visible historical revision to a temporary file.
+
+    for_content selects extraction-friendly formats for supported native
+    revisions and overrides export_format. Otherwise, export_format selects
+    the native export; blob revisions always use their original bytes.
+    """
     resolved_file_id, metadata = await resolve_drive_item(
         service,
         file_id,
@@ -765,9 +772,20 @@ async def download_drive_revision_to_temp(
     revision_mime_type = revision.get("mimeType") or current_mime_type
     tmp_path = None
     try:
-        if current_mime_type.startswith(GOOGLE_APPS_MIME_PREFIX):
+        export_mime_type = None
+        if revision_mime_type.startswith(GOOGLE_APPS_MIME_PREFIX):
+            content_formats = {
+                GOOGLE_DOCS_MIME_TYPE: "docx",
+                GOOGLE_SHEETS_MIME_TYPE: "xlsx",
+                GOOGLE_SLIDES_MIME_TYPE: "pptx",
+            }
+            selected_export_format = (
+                content_formats.get(revision_mime_type)
+                if for_content
+                else export_format
+            )
             target_mime, extension = _revision_export_target(
-                current_mime_type, export_format
+                revision_mime_type, selected_export_format
             )
             export_links = revision.get("exportLinks") or {}
             export_url = export_links.get(target_mime)
@@ -791,6 +809,7 @@ async def download_drive_revision_to_temp(
                 web_view_link=metadata.get("webViewLink"),
             )
             output_mime_type = target_mime
+            export_mime_type = target_mime
             output_filename = f"{Path(file_name).stem}_rev{revision_id}.{extension}"
         else:
             original_name = revision.get("originalFilename") or file_name
@@ -830,6 +849,7 @@ async def download_drive_revision_to_temp(
             "revision_modified_time": revision.get("modifiedTime"),
             "output_filename": output_filename,
             "output_mime_type": output_mime_type,
+            "export_mime_type": export_mime_type,
         }
     except BaseException:
         if tmp_path is not None:
