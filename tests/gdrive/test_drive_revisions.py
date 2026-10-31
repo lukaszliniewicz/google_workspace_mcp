@@ -47,6 +47,85 @@ def _mock_revision_service(list_response=None, get_response=None):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool",
+    [get_drive_file_content, get_drive_file_download_url],
+    ids=["content", "download"],
+)
+@pytest.mark.parametrize("revision_id", ["", " ", " \t\n"])
+async def test_revision_tools_reject_blank_ids_before_google_requests(
+    tool, revision_id
+):
+    """An explicit blank historical selector must never become a current read."""
+    with (
+        patch("gdrive.drive_tools.resolve_drive_item") as resolve,
+        patch("gdrive.drive_tools.download_drive_revision_to_temp") as historical,
+        patch("gdrive.drive_tools._media_request") as current,
+        pytest.raises(UserInputError, match=r"revision_id cannot be blank\."),
+    ):
+        await _unwrap(tool)(
+            service=Mock(),
+            user_google_email="user@example.com",
+            file_id="file123",
+            revision_id=revision_id,
+        )
+    resolve.assert_not_awaited()
+    historical.assert_not_awaited()
+    current.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool",
+    [get_drive_file_content, get_drive_file_download_url],
+    ids=["content", "download"],
+)
+async def test_revision_tools_trim_valid_ids_and_preserve_historical_identity(
+    tool, tmp_path, monkeypatch
+):
+    """Whitespace around a real ID does not change the selected historical version."""
+    monkeypatch.delenv("WORKSPACE_MCP_MAX_FILE_BYTES", raising=False)
+    monkeypatch.setenv("WORKSPACE_MCP_MAX_CONTENT_CHARS", "40000")
+    path = tmp_path / "revision.txt"
+    path.write_bytes(b"Historical text")
+    download = {
+        "path": path,
+        "file_id": "file123",
+        "file_name": "note.txt",
+        "revision_id": "12",
+        "revision_modified_time": "2026-08-28T13:00:00Z",
+        "output_filename": "note_rev12.txt",
+        "output_mime_type": "text/plain",
+    }
+    with (
+        patch(
+            "gdrive.drive_tools.resolve_drive_item",
+            return_value=("file123", {"name": "note.txt", "mimeType": "text/plain"}),
+        ),
+        patch(
+            "gdrive.drive_tools.download_drive_revision_to_temp", return_value=download
+        ) as historical,
+        patch("gdrive.drive_tools._media_request") as current,
+        patch("gdrive.drive_tools.is_stateless_mode", return_value=True),
+        patch("gdrive.drive_tools.gcs_files_enabled", return_value=False),
+        patch("gdrive.drive_tools.get_stateless_inline_max_bytes", return_value=100),
+    ):
+        result = await _unwrap(tool)(
+            service=Mock(),
+            user_google_email="user@example.com",
+            file_id="file123",
+            revision_id=" \t12\n ",
+        )
+    historical.assert_awaited_once()
+    assert historical.await_args.args[2] == "12"
+    text = result if isinstance(result, str) else result.content[0].text
+    assert "Revision: 12 (2026-08-28T13:00:00Z)" in text
+    assert "Revision:  \t12" not in text
+    current.assert_not_called()
+    assert not path.exists()
+
+
+@pytest.mark.asyncio
 async def test_missing_revision_explains_compaction_without_reading_current_content():
     service = _mock_revision_service(get_response={})
     service.revisions().get().execute.side_effect = HttpError(

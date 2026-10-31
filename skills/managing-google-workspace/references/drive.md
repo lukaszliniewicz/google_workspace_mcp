@@ -70,7 +70,7 @@ Retrieve file content as text.
 | file_id | string | yes | | Drive file ID |
 | offset | integer | no | 0 | Character offset to start from, to read on after a cut-off result |
 | full_content | boolean | no | false | Return everything from `offset` onward in one call instead of a page |
-| revision_id | string | no | | Historical revision ID returned by `list_drive_items(resource_type="revisions", file_id=...)`; supports the same paging options |
+| revision_id | string | no | | Nonblank historical revision ID returned by `list_drive_items(resource_type="revisions", file_id=...)`; supports the same paging options |
 
 Content handling:
 - Google Docs/Sheets/Slides: exported as text/CSV
@@ -91,7 +91,7 @@ Download a file to local disk (stdio mode) or get a temporary URL (HTTP mode, va
 | user_google_email | string | yes | | |
 | file_id | string | yes | | Drive file ID |
 | export_format | string | no | | `pdf`, `docx`, `xlsx`, `csv`, `pptx`, `png`, `jpg`, `svg` |
-| revision_id | string | no | | Historical revision ID returned by `list_drive_items(resource_type="revisions", file_id=...)` |
+| revision_id | string | no | | Nonblank historical revision ID returned by `list_drive_items(resource_type="revisions", file_id=...)` |
 
 Default export formats for Google native files:
 - Docs: PDF (or `docx`)

@@ -519,7 +519,7 @@ async def get_drive_file_content(
         offset: Character offset to read on from after a truncated result.
         full_content: Return all content from offset onward in one call
             instead of a page of the default size.
-        revision_id: Optional historical revision ID to read instead of the current file.
+        revision_id: Optional nonblank historical revision ID to read instead of the current file.
             Keep the same revision ID when reading subsequent pages by offset.
 
     Returns:
@@ -529,6 +529,11 @@ async def get_drive_file_content(
         restart from offset=0. For images, a ToolResult with that text followed
         by the image as image content.
     """
+    if revision_id is not None:
+        revision_id = revision_id.strip()
+        if not revision_id:
+            raise UserInputError("revision_id cannot be blank.")
+
     logger.info(
         f"[get_drive_file_content] Invoked. File ID: '{file_id}', Revision: {revision_id}"
     )
@@ -721,7 +726,7 @@ async def get_drive_file_download_url(
                       If not specified, uses sensible defaults (PDF for Docs/Slides, XLSX for Sheets,
                       PNG for Drawings).
                       For Sheets: supports 'csv', 'pdf', or 'xlsx' (default).
-        revision_id: Optional revision ID from list_drive_items(resource_type="revisions", file_id=...).
+        revision_id: Optional nonblank revision ID from list_drive_items(resource_type="revisions", file_id=...).
 
     Returns:
         str: File metadata with either a local file path or download URL. In
@@ -729,6 +734,11 @@ async def get_drive_file_download_url(
         embeds the file; the annotation stays str so the advertised output
         schema is unchanged.
     """
+    if revision_id is not None:
+        revision_id = revision_id.strip()
+        if not revision_id:
+            raise UserInputError("revision_id cannot be blank.")
+
     logger.info(
         f"[get_drive_file_download_url] Invoked. File ID: '{file_id}', "
         f"Export format: {export_format}, Revision: {revision_id}"
